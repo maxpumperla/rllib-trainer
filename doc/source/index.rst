@@ -50,7 +50,7 @@ If you define a DQN Trainer with the wrong config, your IDE will tell you on def
 
 Here's a snapshot from PyCharm:
 
-.. image:: ../../assets/dqn_fail.png
+.. image:: assets/dqn_fail.png
     :align: center
 
 How to document Trainers in a less stupid way
