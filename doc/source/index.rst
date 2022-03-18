@@ -1,6 +1,8 @@
 RLlib Configuration
 ===================
 
+Link to GitHub project:  `maxpumperla/rllib-trainer <https://github.com/maxpumperla/rllib-trainer>`_
+
 .. contents::
     :local:
     :depth: 1
@@ -53,11 +55,12 @@ Here's a snapshot from PyCharm:
 .. image:: assets/dqn_fail.png
     :align: center
 
-How to document Trainers in a less stupid way
----------------------------------------------
+How to document Trainers in a less annoying way
+-----------------------------------------------
 
 Instead of having loooooooong lists of flat parameters, we can simply auto-generate
-class documentation, with types etc.
+class documentation, with types and stuff.
+Users might actually understand what's going on!
 
 
 TrainerConfigurator
