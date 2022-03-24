@@ -10,7 +10,7 @@ from rllib.ppo import PPOConfig
 dqn_config = DQNConfig() \
     .training(gamma=0.9, lr=0.01) \
     .resources(num_gpus=0) \
-    .workers(num_workers=1)
+    .rollouts(num_workers=1)
 dqn_trainer = dqn_config.build(env="CartPole-v1")
 print(dqn_trainer.train())
 
