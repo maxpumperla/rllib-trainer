@@ -1,5 +1,8 @@
+import copy
+
 from ray.rllib.utils.typing import (
     EnvType,
+    TrainerConfigDict,
 )
 
 from typing import (
@@ -15,9 +18,7 @@ from ray.tune.logger import Logger
 
 
 class TrainerConfig:
-    """
-    An RLlib TrainerConfig builds an RLlib trainer from
-    a given configuration.
+    """A RLlib TrainerConfig builds an RLlib trainer from a given configuration.
 
     Example:
        >>> from rllib.trainer import TrainerConfig
@@ -27,12 +28,59 @@ class TrainerConfig:
                         .workers(num_workers=4)
     """
 
-    def to_dict(self):
+    def __init__(self, trainer_class=None):
+        # Define all settings and their default values.
 
-        extra_config = vars(self)
+        # Define the default RLlib Trainer class that this TrainerConfig will be
+        # applied to.
+        self.trainer_class = trainer_class or Trainer
+
+        #TODO: define all properties with default values below:
+
+        # `self.training()`
+        self.gamma = 0.99
+        self.lr = 0.001
+        self.train_batch_size = 32
+        self.model = MODEL_DEFAULTS
+        self.optimizer = {}
+
+        # `self.resources()`
+        self.num_gpus = 0
+        self.num_cpus_per_worker = 1
+        self.num_gpus_per_worker = 0
+        self._fake_gpus = False
+        self.num_cpus_for_local_worker = 1
+
+        # `self.environment()`
+        self.env = None
+        self.env_config = {}
+        self.observation_space = None
+        self.action_space = None
+
+    def to_dict(self) -> TrainerConfigDict:
+        """Converts all settings into a legacy config dict for backward compatibility.
+
+        Returns:
+            A complete TrainerConfigDict, usable in backward-compatible Tune/RLlib
+            use cases, e.g. w/ `tune.run()`.
+        """
+        extra_config = copy.deepcopy(vars(self))
+        extra_config.pop("trainer_class")
+
+        # Worst naming convention ever: NEVER EVER use reserved key-words...
+        if "lambda_" in extra_config:
+            assert hasattr(self, "lambda_")
+            extra_config["lambda"] = getattr(self, "lambda_")
+            extra_config.pop("lambda_")
+
+        # Switch out `num_cpus_for_local_worker` (new) vs `num_cpus_for_driver` (old).
+        extra_config["num_cpus_for_driver"] = \
+            extra_config.pop("num_cpus_for_local_worker", 1)
+
+        base_config = self.trainer_class.get_default_config()
 
         return Trainer.merge_trainer_configs(
-            COMMON_CONFIG, extra_config, _allow_unknown_configs=True
+            base_config, extra_config, _allow_unknown_configs=True
         )
 
     def build(self, env: Optional[Union[str, EnvType]] = None,
@@ -49,35 +97,38 @@ class TrainerConfig:
                 object. If unspecified, a default logger is created.
 
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
+            This updated TrainerConfig object.
         """
         raise NotImplementedError
 
     def training(self,
-                 gamma: float = 0.99,
-                 lr: float = 0.001,
-                 train_batch_size: int = 32,
-                 model: dict = None,
-                 optimizer: dict = None) -> "TrainerConfig":
+                 gamma: Optional[float] = None,
+                 lr: Optional[float] = None,
+                 train_batch_size: Optional[int] = None,
+                 model: Optional[dict] = None,
+                 optimizer: Optional[dict] = None) -> "TrainerConfig":
         """
         Args:
-            gamma: integer specifying the discount factor of the Markov Decision process
-            lr: the default learning rate
+            gamma: Float specifying the discount factor of the Markov Decision process.
+            lr: The default learning rate.
             train_batch_size: Training batch size, if applicable.
             model: Arguments passed into the policy model. See models/catalog.py for a full
                    list of the available model options.
             optimizer: Arguments to pass to the policy optimizer.
-        """
-        if model is None:
-            model = MODEL_DEFAULTS
-        if optimizer is None:
-            optimizer = {}
 
-        self.gamma = gamma
-        self.lr = lr
-        self.train_batch_size = train_batch_size
-        self.model = model
-        self.optimizer = optimizer
+        Returns:
+            This updated TrainerConfig object.
+        """
+        if gamma is not None:
+            self.gamma = gamma
+        if lr is not None:
+            self.lr = lr
+        if train_batch_size is not None:
+            self.train_batch_size = train_batch_size
+        if model is not None:
+            self.model = model
+        if optimizer is not None:
+            self.optimizer = optimizer
 
         return self
 
@@ -89,8 +140,7 @@ class TrainerConfig:
                          this to 0 will force rollouts to be done in the trainer actor.
 
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
-
+            This updated TrainerConfig object.
         """
         self.num_workers = num_workers
 
@@ -137,7 +187,13 @@ class TrainerConfig:
     # "batch_mode": "truncate_episodes",
 
     # TODO type for env.
-    def environment(self, env=None, observation_space=None, action_space=None) -> "TrainerConfig":
+    def environment(self,
+                    *,
+                    env=None,
+                    env_config=None,
+                    observation_space=None,
+                    action_space=None,
+                    ) -> "TrainerConfig":
         """ Sets the environment configuration.
 
         Args:
@@ -147,17 +203,23 @@ class TrainerConfig:
                  RLlib will try to interpret the specifier as either an openAI gym env,
                  a PyBullet env, a ViZDoomGym env, or a fully qualified classpath to an
                  Env class, e.g. "ray.rllib.examples.env.random_env.RandomEnv".
+            env_config: Arguments dict passed to the env creator as an EnvContext
+                object (which is a dict plus the properties: num_workers, worker_index,
+                vector_index, and remote).
             observation_space: The observation space for the Policies of this Trainer.
             action_space: The action space for the Policies of this Trainer.
 
-
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
-
+            This updated TrainerConfig object.
         """
-        self.env = env
-        self.observation_space = observation_space
-        self.action_space = action_space
+        if env is not None:
+            self.env = env
+        if env_config is not None:
+            self.env_config = env_config
+        if observation_space is not None:
+            self.observation_space = observation_space
+        if action_space is not None:
+            self.action_space = action_space
 
         return self
 
@@ -182,10 +244,6 @@ class TrainerConfig:
     # #   Do NOT reset env at horizon and do NOT add `done=True` at the horizon.
     # "no_done_at_end": False,
 
-    # # Arguments dict passed to the env creator as an EnvContext object (which
-    # # is a dict plus the properties: num_workers, worker_index, vector_index,
-    # # and remote).
-    # "env_config": {},
     # # If using num_envs_per_worker > 1, whether to create those new envs in
     # # remote processes instead of in the same worker. This adds overheads, but
     # # can make sense if your envs can take much time to step / reset
@@ -427,35 +485,51 @@ class TrainerConfig:
     # # The extra python environments need to set for worker processes.
     # "extra_python_environs_for_worker": {},
 
-    def resources(self, num_gpus):
-        """Specifies resources allocated...
+    def resources(self,
+                  *,
+                  num_gpus: Optional[Union[float, int]] =  None,
+                  _fake_gpus: Optional[bool] = None,
+                  num_cpus_per_worker: Optional[int] = None,
+                  num_gpus_per_worker: Optional[Union[float, int]] = None,
+                  num_cpus_for_local_worker: Optional[int] = None,
+                  ):
+        """Specifies resources allocated for a Trainer and its ray actors/workers.
+
+        Args:
+            num_gpus: Number of GPUs to allocate to the trainer process.
+                Note that not all algorithms can take advantage of trainer GPUs.
+                Support for multi-GPU is currently only available for
+                tf-[PPO/IMPALA/DQN/PG]. This can be fractional (e.g., 0.3 GPUs).
+            _fake_gpus: Set to True for debugging (multi-)?GPU funcitonality on a
+                CPU machine. GPU towers will be simulated by graphs located on
+                CPUs in this case. Use `num_gpus` to test for different numbers of
+                fake GPUs.
+            num_cpus_per_worker: Number of CPUs to allocate per worker.
+            num_gpus_per_worker: Number of GPUs to allocate per worker. This can be
+                fractional. This is usually needed only if your env itself requires a
+                GPU (i.e., it is a GPU-intensive video game), or model inference is
+                unusually expensive.
+            custom_resources_per_worker: Any custom Ray resources to allocate per
+                worker.
+            num_cpus_for_local_worker: Number of CPUs to allocate for the trainer.
+                Note: this only takes effect when running in Tune. Otherwise,
+                the trainer runs in the main program (driver).
         """
-        self.num_gpus = num_gpus
+        if num_gpus is not None:
+            self.num_gpus = num_gpus
+        if _fake_gpus is not None:
+            self._fake_gpus = _fake_gpus
+        if num_cpus_per_worker is not None:
+            self.num_cpus_per_worker = num_cpus_per_worker
+        if num_gpus_per_worker is not None:
+            self.num_gpus_per_worker = num_gpus_per_worker
+        if num_cpus_for_local_worker is not None:
+            self.num_cpus_for_local_worker = num_cpus_for_local_worker
 
         return self
 
-    # TODO def resources()
-    # # === Resource Settings ===
-    # # Number of GPUs to allocate to the trainer process. Note that not all
-    # # algorithms can take advantage of trainer GPUs. Support for multi-GPU
-    # # is currently only available for tf-[PPO/IMPALA/DQN/PG].
-    # # This can be fractional (e.g., 0.3 GPUs).
-    # "num_gpus": 0,
-    # # Set to True for debugging (multi-)?GPU funcitonality on a CPU machine.
-    # # GPU towers will be simulated by graphs located on CPUs in this case.
-    # # Use `num_gpus` to test for different numbers of fake GPUs.
-    # "_fake_gpus": False,
-    # # Number of CPUs to allocate per worker.
-    # "num_cpus_per_worker": 1,
-    # # Number of GPUs to allocate per worker. This can be fractional. This is
-    # # usually needed only if your env itself requires a GPU (i.e., it is a
-    # # GPU-intensive video game), or model inference is unusually expensive.
-    # "num_gpus_per_worker": 0,
-    # # Any custom Ray resources to allocate per worker.
+    # TODO remaining: `resources()`
     # "custom_resources_per_worker": {},
-    # # Number of CPUs to allocate for the trainer. Note: this only takes effect
-    # # when running in Tune. Otherwise, the trainer runs in the main program.
-    # "num_cpus_for_driver": 1,
     # # The strategy for the placement group factory returned by
     # # `Trainer.default_resource_request()`. A PlacementGroup defines, which
     # # devices (resources) should always be co-located on the same node.
@@ -522,7 +596,9 @@ class TrainerConfig:
     # # Max output file size before rolling over to a new file.
     # "output_max_file_size": 64 * 1024 * 1024,
 
-    # TODO def multi_agent()
+    #def multi_agent(self, *, policies=None, policy_map_capacity=None):
+    #    pass
+
     # # === Settings for Multi-Agent Environments ===
     # "multiagent": {
     #     # Map of type MultiAgentPolicyConfigDict from policy ids to tuples
@@ -602,28 +678,6 @@ class TrainerConfig:
     #
     # # If True, disable the environment pre-checking module.
     # "disable_env_checking": False,
-
-    # TODO don't support these in configurator anymore.
-    # # === Deprecated keys ===
-    # # Uses the sync samples optimizer instead of the multi-gpu one. This is
-    # # usually slower, but you might want to try it if you run into issues with
-    # # the default optimizer.
-    # # This will be set automatically from now on.
-    # "simple_optimizer": DEPRECATED_VALUE,
-    # # Whether to write episode stats and videos to the agent log dir. This is
-    # # typically located in ~/ray_results.
-    # "monitor": DEPRECATED_VALUE,
-    # # Replaced by `evaluation_duration=10` and
-    # # `evaluation_duration_unit=episodes`.
-    # "evaluation_num_episodes": DEPRECATED_VALUE,
-    # # Use `metrics_num_episodes_for_smoothing` instead.
-    # "metrics_smoothing_episodes": DEPRECATED_VALUE,
-    # # Use `min_[env|train]_timesteps_per_reporting` instead.
-    # "timesteps_per_iteration": 0,
-    # # Use `min_time_s_per_reporting` instead.
-    # "min_iter_time_s": DEPRECATED_VALUE,
-    # # Use `metrics_episode_collection_timeout_s` instead.
-    # "collect_metrics_timeout": DEPRECATED_VALUE,
 
 
 if __name__ == "__main__":
