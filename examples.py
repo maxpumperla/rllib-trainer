@@ -4,7 +4,7 @@ from ray import tune
 from rllib.dqn import DQNConfig
 from rllib.ppo import PPOConfig
 
-ray.init(local_mode=True)
+#ray.init(local_mode=True)
 
 # Manual RLlib Trainer setup.
 dqn_config = DQNConfig() \
@@ -16,6 +16,7 @@ print(dqn_trainer.train())
 
 # With tune.
 ppo_config = PPOConfig(kl_coeff=0.1).environment(env="CartPole-v1")
+# Add a tune grid-search over learning rate.
 ppo_config.training(lr=tune.grid_search([0.001, 0.0001]))
 
 tune.run(
