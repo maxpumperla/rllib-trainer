@@ -1,6 +1,5 @@
-from ray.rllib.utils.typing import (
-    EnvType,
-)
+import copy
+import gym
 
 from typing import (
     Callable,
@@ -9,15 +8,14 @@ from typing import (
 )
 
 from ray.rllib.models import MODEL_DEFAULTS
-from ray.rllib.agents.trainer import Trainer, COMMON_CONFIG
-
+from ray.rllib.agents.trainer import Trainer
+from ray.rllib.utils.typing import EnvConfigDict, EnvType, PartialTrainerConfigDict, \
+    TrainerConfigDict
 from ray.tune.logger import Logger
 
 
 class TrainerConfig:
-    """
-    An RLlib TrainerConfig builds an RLlib trainer from
-    a given configuration.
+    """A RLlib TrainerConfig builds an RLlib trainer from a given configuration.
 
     Example:
        >>> from rllib.trainer import TrainerConfig
@@ -27,12 +25,97 @@ class TrainerConfig:
                         .workers(num_workers=4)
     """
 
-    def to_dict(self):
+    def __init__(self, trainer_class=None):
+        # Define all settings and their default values.
 
-        extra_config = vars(self)
+        # Define the default RLlib Trainer class that this TrainerConfig will be
+        # applied to.
+        self.trainer_class = trainer_class or Trainer
 
+        #TODO: define all properties with default values below:
+
+        # `self.training()`
+        self.gamma = 0.99
+        self.lr = 0.001
+        self.train_batch_size = 32
+        self.model = MODEL_DEFAULTS
+        self.optimizer = {}
+
+        # `self.resources()`
+        self.num_gpus = 0
+        self.num_cpus_per_worker = 1
+        self.num_gpus_per_worker = 0
+        self._fake_gpus = False
+        self.num_cpus_for_local_worker = 1
+
+        # `self.environment()`
+        self.env = None
+        self.env_config = {}
+        self.observation_space = None
+        self.action_space = None
+
+        # `self.rollouts()`
+        self.num_workers = 2
+        self.num_envs_per_worker = 1
+        self.create_env_on_local_worker = False
+        self.rollout_fragment_length = 200
+        self.batch_mode = "truncate_episodes"
+        self.remote_worker_envs = False
+        self.remote_env_batch_wait_ms = 0
+
+        # `self.explore()`
+        self.explore = True
+        self.exploration_config = {
+            # The Exploration class to use. In the simplest case, this is the name
+            # (str) of any class present in the `rllib.utils.exploration` package.
+            # You can also provide the python class directly or the full location
+            # of your class (e.g. "ray.rllib.utils.exploration.epsilon_greedy.
+            # EpsilonGreedy").
+            "type": "StochasticSampling",
+            # Add constructor kwargs here (if any).
+        }
+
+        # `self.evaluation()`
+        self.evaluation_interval = 0
+        self.evaluation_duration = 10
+        self.evaluation_duration_unit = "episodes"
+        self.evaluation_parallel_to_training = False
+        self.evaluation_config = {}
+        self.evaluation_num_workers = 0
+        self.custom_evaluation_function = None
+        self.always_attach_evaluation_results = False
+
+    def to_dict(self) -> TrainerConfigDict:
+        """Converts all settings into a legacy config dict for backward compatibility.
+
+        Returns:
+            A complete TrainerConfigDict, usable in backward-compatible Tune/RLlib
+            use cases, e.g. w/ `tune.run()`.
+        """
+        extra_config = copy.deepcopy(vars(self))
+        extra_config.pop("trainer_class")
+
+        # Worst naming convention ever: NEVER EVER use reserved key-words...
+        if "lambda_" in extra_config:
+            assert hasattr(self, "lambda_")
+            extra_config["lambda"] = getattr(self, "lambda_")
+            extra_config.pop("lambda_")
+
+        # Switch out deprecated vs new config keys.
+        extra_config["create_env_on_driver"] = \
+            extra_config.pop("create_env_on_local_worker", 1)
+        extra_config["custom_eval_function"] = \
+            extra_config.pop("custom_evaluation_function", None)
+        extra_config["num_cpus_for_driver"] = \
+            extra_config.pop("num_cpus_for_local_worker", 1)
+
+        # Get our Trainer class' default config.
+        base_config = self.trainer_class.get_default_config()
+        base_config.pop("in_evaluation", None)
+
+        # Add our overrides to the default config.
         return Trainer.merge_trainer_configs(
-            COMMON_CONFIG, extra_config, _allow_unknown_configs=True
+            base_config, extra_config, _allow_unknown_configs=True
         )
 
     def build(self, env: Optional[Union[str, EnvType]] = None,
@@ -49,96 +132,141 @@ class TrainerConfig:
                 object. If unspecified, a default logger is created.
 
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
+            A ray.rllib.agents.dqn.DQNTrainer object.
         """
-        raise NotImplementedError
+        if env is not None:
+            self.env = env
+            if self.evaluation_config is not None:
+                self.evaluation_config["env"] = env
+
+        return self.trainer_class(
+            config=self.to_dict(),
+            env=env,
+            logger_creator=logger_creator,
+        )
+
+
 
     def training(self,
-                 gamma: float = 0.99,
-                 lr: float = 0.001,
-                 train_batch_size: int = 32,
-                 model: dict = None,
-                 optimizer: dict = None) -> "TrainerConfig":
+                 gamma: Optional[float] = None,
+                 lr: Optional[float] = None,
+                 train_batch_size: Optional[int] = None,
+                 model: Optional[dict] = None,
+                 optimizer: Optional[dict] = None) -> "TrainerConfig":
         """
         Args:
-            gamma: integer specifying the discount factor of the Markov Decision process
-            lr: the default learning rate
+            gamma: Float specifying the discount factor of the Markov Decision process.
+            lr: The default learning rate.
             train_batch_size: Training batch size, if applicable.
             model: Arguments passed into the policy model. See models/catalog.py for a full
                    list of the available model options.
             optimizer: Arguments to pass to the policy optimizer.
-        """
-        if model is None:
-            model = MODEL_DEFAULTS
-        if optimizer is None:
-            optimizer = {}
 
-        self.gamma = gamma
-        self.lr = lr
-        self.train_batch_size = train_batch_size
-        self.model = model
-        self.optimizer = optimizer
+        Returns:
+            This updated TrainerConfig object.
+        """
+        if gamma is not None:
+            self.gamma = gamma
+        if lr is not None:
+            self.lr = lr
+        if train_batch_size is not None:
+            self.train_batch_size = train_batch_size
+        if model is not None:
+            self.model = model
+        if optimizer is not None:
+            self.optimizer = optimizer
 
         return self
 
-    def workers(self, num_workers: int = 2) -> "TrainerConfig":
+    def rollouts(self,
+                 *,
+                 num_rollout_workers: Optional[int] = None,
+                 num_envs_per_worker: Optional[int] = None,
+                 create_env_on_local_worker: Optional[bool] = None,
+                 rollout_fragment_length: Optional[int] = None,
+                 batch_mode: Optional[str] = None,
+                 remote_worker_envs: Optional[bool] = None,
+                 remote_env_batch_wait_ms: Optional[float] = None,
+                 ) -> "TrainerConfig":
         """ Sets the rollout worker configuration.
 
         Args:
-            num_workers: Number of rollout worker actors to create for parallel sampling. Setting
-                         this to 0 will force rollouts to be done in the trainer actor.
+            num_rollout_workers: Number of rollout worker actors to create for
+                parallel sampling. Setting this to 0 will force rollouts to be done in
+                the local worker (driver process or the Trainer actor when using Tune).
+            num_envs_per_worker: Number of environments to evaluate vector-wise per
+                worker. This enables model inference batching, which can improve
+                performance for inference bottlenecked workloads.
+            create_env_on_local_worker: When `num_workers` > 0, the driver
+                (local_worker; worker-idx=0) does not need an environment. This is
+                because it doesn't have to sample (done by remote_workers;
+                worker_indices > 0) nor evaluate (done by evaluation workers;
+                see below).
+            rollout_fragment_length: Divide episodes into fragments of this many steps
+                each during rollouts. Sample batches of this size are collected from
+                rollout workers and combined into a larger batch of `train_batch_size`
+                for learning.
+                For example, given rollout_fragment_length=100 and train_batch_size=1000:
+                1. RLlib collects 10 fragments of 100 steps each from rollout workers.
+                2. These fragments are concatenated and we perform an epoch of SGD.
+                When using multiple envs per worker, the fragment size is multiplied by
+                `num_envs_per_worker`. This is since we are collecting steps from
+                multiple envs in parallel. For example, if num_envs_per_worker=5, then
+                rollout workers will return experiences in chunks of 5*100 = 500 steps.
+                The dataflow here can vary per algorithm. For example, PPO further
+                divides the train batch into minibatches for multi-epoch SGD.
+            batch_mode: How to build per-Sampler (RolloutWorker) batches, which are then
+                usually concat'd to form the train batch. Note that "steps" below can
+                mean different things (either env- or agent-steps) and depends on the
+                `count_steps_by` (multiagent) setting below.
+                "truncate_episodes": Each produced batch (when calling
+                RolloutWorker.sample()) will contain exactly `rollout_fragment_length`
+                steps. This mode guarantees evenly sized batches, but increases
+                variance as the future return must now be estimated at truncation
+                boundaries.
+                "complete_episodes": Each unroll happens exactly over one episode, from
+                beginning to end. Data collection will not stop unless the episode
+                terminates or a configured horizon (hard or soft) is hit.
+            remote_worker_envs: If using num_envs_per_worker > 1, whether to create
+                those new envs in remote processes instead of in the same worker.
+                This adds overheads, but can make sense if your envs can take much
+                time to step / reset (e.g., for StarCraft). Use this cautiously;
+                overheads are significant.
+            remote_env_batch_wait_ms: Timeout that remote workers are waiting when
+                polling environments. 0 (continue when at least one env is ready) is
+                a reasonable default, but optimal value could be obtained by measuring
+                your environment step / reset and model inference perf.
 
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
-
+            This updated TrainerConfig object.
         """
-        self.num_workers = num_workers
+        if num_rollout_workers is not None:
+            self.num_workers = num_rollout_workers
+        if num_envs_per_worker is not None:
+            self.num_envs_per_worker = num_envs_per_worker
+        if create_env_on_local_worker is not None:
+            self.create_env_on_local_worker = create_env_on_local_worker
+        if rollout_fragment_length is not None:
+            self.rollout_fragment_length = rollout_fragment_length
+        if batch_mode is not None:
+            self.batch_mode = batch_mode
+        if remote_worker_envs is not None:
+            self.remote_worker_envs = remote_worker_envs
+        if remote_env_batch_wait_ms is not None:
+            self.remote_env_batch_wait_ms = remote_env_batch_wait_ms
 
         return self
 
-    # # === Settings for Rollout Worker processes ===
-    # # Number of environments to evaluate vector-wise per worker. This enables
-    # # model inference batching, which can improve performance for inference
-    # # bottlenecked workloads.
-    # "num_envs_per_worker": 1,
-    # # When `num_workers` > 0, the driver (local_worker; worker-idx=0) does not
-    # # need an environment. This is because it doesn't have to sample (done by
-    # # remote_workers; worker_indices > 0) nor evaluate (done by evaluation
-    # # workers; see below).
-    # "create_env_on_driver": False,
-    # # Divide episodes into fragments of this many steps each during rollouts.
-    # # Sample batches of this size are collected from rollout workers and
-    # # combined into a larger batch of `train_batch_size` for learning.
-    # #
-    # # For example, given rollout_fragment_length=100 and train_batch_size=1000:
-    # #   1. RLlib collects 10 fragments of 100 steps each from rollout workers.
-    # #   2. These fragments are concatenated and we perform an epoch of SGD.
-    # #
-    # # When using multiple envs per worker, the fragment size is multiplied by
-    # # `num_envs_per_worker`. This is since we are collecting steps from
-    # # multiple envs in parallel. For example, if num_envs_per_worker=5, then
-    # # rollout workers will return experiences in chunks of 5*100 = 500 steps.
-    # #
-    # # The dataflow here can vary per algorithm. For example, PPO further
-    # # divides the train batch into minibatches for multi-epoch SGD.
-    # "rollout_fragment_length": 200,
-    # # How to build per-Sampler (RolloutWorker) batches, which are then
-    # # usually concat'd to form the train batch. Note that "steps" below can
-    # # mean different things (either env- or agent-steps) and depends on the
-    # # `count_steps_by` (multiagent) setting below.
-    # # truncate_episodes: Each produced batch (when calling
-    # #   RolloutWorker.sample()) will contain exactly `rollout_fragment_length`
-    # #   steps. This mode guarantees evenly sized batches, but increases
-    # #   variance as the future return must now be estimated at truncation
-    # #   boundaries.
-    # # complete_episodes: Each unroll happens exactly over one episode, from
-    # #   beginning to end. Data collection will not stop unless the episode
-    # #   terminates or a configured horizon (hard or soft) is hit.
-    # "batch_mode": "truncate_episodes",
-
     # TODO type for env.
-    def environment(self, env=None, observation_space=None, action_space=None) -> "TrainerConfig":
-        """ Sets the environment configuration.
+    def environment(self,
+                    *,
+                    env: Optional[Union[str, EnvType]] = None,
+                    env_config: Optional[EnvConfigDict] = None,
+                    observation_space: Optional[gym.spaces.Space] = None,
+                    action_space: Optional[gym.spaces.Space] = None,
+
+                    ) -> "TrainerConfig":
+        """Sets the config's environment settings.
 
         Args:
             env: The environment specifier. This can either be a tune-registered env, via
@@ -147,20 +275,27 @@ class TrainerConfig:
                  RLlib will try to interpret the specifier as either an openAI gym env,
                  a PyBullet env, a ViZDoomGym env, or a fully qualified classpath to an
                  Env class, e.g. "ray.rllib.examples.env.random_env.RandomEnv".
+            env_config: Arguments dict passed to the env creator as an EnvContext
+                object (which is a dict plus the properties: num_workers, worker_index,
+                vector_index, and remote).
             observation_space: The observation space for the Policies of this Trainer.
             action_space: The action space for the Policies of this Trainer.
 
-
         Returns:
-            A ray.rllib.agents.trainer.Trainer object.
-
+            This updated TrainerConfig object.
         """
-        self.env = env
-        self.observation_space = observation_space
-        self.action_space = action_space
+        if env is not None:
+            self.env = env
+        if env_config is not None:
+            self.env_config = env_config
+        if observation_space is not None:
+            self.observation_space = observation_space
+        if action_space is not None:
+            self.action_space = action_space
 
         return self
 
+    #TODO: move these into `rollouts`
     # # === Environment Settings ===
     # # Number of steps after which the episode is forced to terminate. Defaults
     # # to `env.spec.max_episode_steps` (if present) for Gym envs.
@@ -182,20 +317,7 @@ class TrainerConfig:
     # #   Do NOT reset env at horizon and do NOT add `done=True` at the horizon.
     # "no_done_at_end": False,
 
-    # # Arguments dict passed to the env creator as an EnvContext object (which
-    # # is a dict plus the properties: num_workers, worker_index, vector_index,
-    # # and remote).
-    # "env_config": {},
-    # # If using num_envs_per_worker > 1, whether to create those new envs in
-    # # remote processes instead of in the same worker. This adds overheads, but
-    # # can make sense if your envs can take much time to step / reset
-    # # (e.g., for StarCraft). Use this cautiously; overheads are significant.
-    # "remote_worker_envs": False,
-    # # Timeout that remote workers are waiting when polling environments.
-    # # 0 (continue when at least one env is ready) is a reasonable default,
-    # # but optimal value could be obtained by measuring your environment
-    # # step / reset and model inference perf.
-    # "remote_env_batch_wait_ms": 0,
+    #TODO: move these into environment()
     # # A callable taking the last train results, the base env and the env
     # # context as args and returning a new task to set the env to.
     # # The env must be a `TaskSettableEnv` sub-class for this to work.
@@ -281,81 +403,115 @@ class TrainerConfig:
     # # Set to None to ignore the re-trace count and never throw an error.
     # "eager_max_retraces": 20,
 
-    # TODO def exploration()
-    # # === Exploration Settings ===
-    # # Default exploration behavior, iff `explore`=None is passed into
-    # # compute_action(s).
-    # # Set to False for no exploration behavior (e.g., for evaluation).
-    # "explore": True,
-    # # Provide a dict specifying the Exploration object's config.
-    # "exploration_config": {
-    #     # The Exploration class to use. In the simplest case, this is the name
-    #     # (str) of any class present in the `rllib.utils.exploration` package.
-    #     # You can also provide the python class directly or the full location
-    #     # of your class (e.g. "ray.rllib.utils.exploration.epsilon_greedy.
-    #     # EpsilonGreedy").
-    #     "type": "StochasticSampling",
-    #     # Add constructor kwargs here (if any).
-    # },
+    def exploration(self,
+                    *,
+                    explore: Optional[bool] = None,
+                    exploration_config: Optional[dict] = None
+                    ):
+        """Sets the config's exploration settings.
 
-    # TODO def evaluation()
-    # # === Evaluation Settings ===
-    # # Evaluate with every `evaluation_interval` training iterations.
-    # # The evaluation stats will be reported under the "evaluation" metric key.
-    # # Note that for Ape-X metrics are already only reported for the lowest
-    # # epsilon workers (least random workers).
-    # # Set to None (or 0) for no evaluation.
-    # "evaluation_interval": None,
-    # # Duration for which to run evaluation each `evaluation_interval`.
-    # # The unit for the duration can be set via `evaluation_duration_unit` to
-    # # either "episodes" (default) or "timesteps".
-    # # If using multiple evaluation workers (evaluation_num_workers > 1),
-    # # the load to run will be split amongst these.
-    # # If the value is "auto":
-    # # - For `evaluation_parallel_to_training=True`: Will run as many
-    # #   episodes/timesteps that fit into the (parallel) training step.
-    # # - For `evaluation_parallel_to_training=False`: Error.
-    # "evaluation_duration": 10,
-    # # The unit, with which to count the evaluation duration. Either "episodes"
-    # # (default) or "timesteps".
-    # "evaluation_duration_unit": "episodes",
-    # # Whether to run evaluation in parallel to a Trainer.train() call
-    # # using threading. Default=False.
-    # # E.g. evaluation_interval=2 -> For every other training iteration,
-    # # the Trainer.train() and Trainer.evaluate() calls run in parallel.
-    # # Note: This is experimental. Possible pitfalls could be race conditions
-    # # for weight synching at the beginning of the evaluation loop.
-    # "evaluation_parallel_to_training": False,
-    # # Internal flag that is set to True for evaluation workers.
-    # "in_evaluation": False,
-    # # Typical usage is to pass extra args to evaluation env creator
-    # # and to disable exploration by computing deterministic actions.
-    # # IMPORTANT NOTE: Policy gradient algorithms are able to find the optimal
-    # # policy, even if this is a stochastic one. Setting "explore=False" here
-    # # will result in the evaluation workers not using this optimal policy!
-    # "evaluation_config": {
-    #     # Example: overriding env_config, exploration, etc:
-    #     # "env_config": {...},
-    #     # "explore": False
-    # },
-    # # Number of parallel workers to use for evaluation. Note that this is set
-    # # to zero by default, which means evaluation will be run in the trainer
-    # # process (only if evaluation_interval is not None). If you increase this,
-    # # it will increase the Ray resource usage of the trainer since evaluation
-    # # workers are created separately from rollout workers (used to sample data
-    # # for training).
-    # "evaluation_num_workers": 0,
-    # # Customize the evaluation method. This must be a function of signature
-    # # (trainer: Trainer, eval_workers: WorkerSet) -> metrics: dict. See the
-    # # Trainer.evaluate() method to see the default implementation.
-    # # The Trainer guarantees all eval workers have the latest policy state
-    # # before this function is called.
-    # "custom_eval_function": None,
-    # # Make sure the latest available evaluation results are always attached to
-    # # a step result dict.
-    # # This may be useful if Tune or some other meta controller needs access
-    # # to evaluation metrics all the time.
-    # "always_attach_evaluation_results": False,
+        Args:
+            explore: Default exploration behavior, iff `explore`=None is passed into
+                compute_action(s). Set to False for no exploration behavior (e.g.,
+                for evaluation).
+            exploration_config: A dict specifying the Exploration object's config.
+
+        Returns:
+            This updated TrainerConfig object.
+        """
+        if explore is not None:
+            self.explore = explore
+        if exploration_config is not None:
+            self.exploration_config = exploration_config
+
+        return self
+
+    def evaluation(self,
+                   *,
+                   evaluation_interval: Optional[int] = None,
+                   evaluation_duration: Optional[int] = None,
+                   evaluation_duration_unit: Optional[str] = None,
+                   evaluation_parallel_to_training: Optional[bool] = None,
+                   evaluation_config: Optional[
+                       Union["TrainerConfig", PartialTrainerConfigDict]] = None,
+                   evaluation_num_workers: Optional[int] = None,
+                   custom_evaluation_function: Optional[Callable] = None,
+                   always_attach_evaluation_results: Optional[bool] = None,
+                   ):
+        """Sets the config's evaluation settings.
+
+        Args:
+            evaluation_interval: Evaluate with every `evaluation_interval` training
+                iterations. The evaluation stats will be reported under the "evaluation"
+                metric key. Note that for Ape-X metrics are already only reported for
+                the lowest epsilon workers (least random workers).
+                Set to None (or 0) for no evaluation.
+            evaluation_duration: Duration for which to run evaluation each
+                `evaluation_interval`. The unit for the duration can be set via
+                `evaluation_duration_unit` to either "episodes" (default) or
+                "timesteps". If using multiple evaluation workers
+                (evaluation_num_workers > 1), the load to run will be split amongst
+                these.
+                If the value is "auto":
+                - For `evaluation_parallel_to_training=True`: Will run as many
+                episodes/timesteps that fit into the (parallel) training step.
+                - For `evaluation_parallel_to_training=False`: Error.
+            evaluation_duration_unit: The unit, with which to count the evaluation
+                duration. Either "episodes" (default) or "timesteps".
+            evaluation_parallel_to_training: Whether to run evaluation in parallel to
+                a Trainer.train() call using threading. Default=False.
+                E.g. evaluation_interval=2 -> For every other training iteration,
+                the Trainer.train() and Trainer.evaluate() calls run in parallel.
+                Note: This is experimental. Possible pitfalls could be race conditions
+                for weight synching at the beginning of the evaluation loop.
+            evaluation_config: Typical usage is to pass extra args to evaluation env
+                creator and to disable exploration by computing deterministic actions.
+                IMPORTANT NOTE: Policy gradient algorithms are able to find the optimal
+                policy, even if this is a stochastic one. Setting "explore=False" here
+                will result in the evaluation workers not using this optimal policy!
+            evaluation_num_workers: Number of parallel workers to use for evaluation.
+                Note that this is set to zero by default, which means evaluation will
+                be run in the trainer process (only if evaluation_interval is not None).
+                If you increase this, it will increase the Ray resource usage of the
+                trainer since evaluation workers are created separately from rollout
+                workers (used to sample data for training).
+            custom_evaluation_function: Customize the evaluation method. This must be a
+                function of signature (trainer: Trainer, eval_workers: WorkerSet) ->
+                metrics: dict. See the Trainer.evaluate() method to see the default
+                implementation. The Trainer guarantees all eval workers have the latest
+                policy state before this function is called.
+            always_attach_evaluation_results: Make sure the latest available evaluation
+                results are always attached to a step result dict. This may be useful
+                if Tune or some other meta controller needs access to evaluation metrics
+                all the time.
+
+        Returns:
+            This updated TrainerConfig object.
+        """
+        if evaluation_interval is not None:
+            self.evaluation_interval = evaluation_interval
+        if evaluation_duration is not None:
+            self.evaluation_duration = evaluation_duration
+        if evaluation_duration_unit is not None:
+            self.evaluation_duration_unit = evaluation_duration_unit
+        if evaluation_parallel_to_training is not None:
+            self.evaluation_parallel_to_training = evaluation_parallel_to_training
+        if evaluation_config is not None:
+            # Convert another TrainerConfig into dict.
+            if isinstance(evaluation_config, TrainerConfig):
+                self.evaluation_config = evaluation_config.to_dict()
+            else:
+                self.evaluation_config = evaluation_config
+        if evaluation_num_workers is not None:
+            self.evaluation_num_workers = evaluation_num_workers
+        if custom_evaluation_function is not None:
+            self.custom_evaluation_function = custom_evaluation_function
+        if self.always_attach_evaluation_results:
+            self.always_attach_evaluation_results = always_attach_evaluation_results
+
+        return self
+
+    #TODO
     # # Store raw custom metrics without calculating max, min, mean
     # "keep_per_episode_custom_metrics": False,
 
@@ -427,35 +583,54 @@ class TrainerConfig:
     # # The extra python environments need to set for worker processes.
     # "extra_python_environs_for_worker": {},
 
-    def resources(self, num_gpus):
-        """Specifies resources allocated...
+    def resources(self,
+                  *,
+                  num_gpus: Optional[Union[float, int]] =  None,
+                  _fake_gpus: Optional[bool] = None,
+                  num_cpus_per_worker: Optional[int] = None,
+                  num_gpus_per_worker: Optional[Union[float, int]] = None,
+                  num_cpus_for_local_worker: Optional[int] = None,
+                  ):
+        """Specifies resources allocated for a Trainer and its ray actors/workers.
+
+        Args:
+            num_gpus: Number of GPUs to allocate to the trainer process.
+                Note that not all algorithms can take advantage of trainer GPUs.
+                Support for multi-GPU is currently only available for
+                tf-[PPO/IMPALA/DQN/PG]. This can be fractional (e.g., 0.3 GPUs).
+            _fake_gpus: Set to True for debugging (multi-)?GPU funcitonality on a
+                CPU machine. GPU towers will be simulated by graphs located on
+                CPUs in this case. Use `num_gpus` to test for different numbers of
+                fake GPUs.
+            num_cpus_per_worker: Number of CPUs to allocate per worker.
+            num_gpus_per_worker: Number of GPUs to allocate per worker. This can be
+                fractional. This is usually needed only if your env itself requires a
+                GPU (i.e., it is a GPU-intensive video game), or model inference is
+                unusually expensive.
+            custom_resources_per_worker: Any custom Ray resources to allocate per
+                worker.
+            num_cpus_for_local_worker: Number of CPUs to allocate for the trainer.
+                Note: this only takes effect when running in Tune. Otherwise,
+                the trainer runs in the main program (driver).
+
+        Returns:
+            This updated TrainerConfig object.
         """
-        self.num_gpus = num_gpus
+        if num_gpus is not None:
+            self.num_gpus = num_gpus
+        if _fake_gpus is not None:
+            self._fake_gpus = _fake_gpus
+        if num_cpus_per_worker is not None:
+            self.num_cpus_per_worker = num_cpus_per_worker
+        if num_gpus_per_worker is not None:
+            self.num_gpus_per_worker = num_gpus_per_worker
+        if num_cpus_for_local_worker is not None:
+            self.num_cpus_for_local_worker = num_cpus_for_local_worker
 
         return self
 
-    # TODO def resources()
-    # # === Resource Settings ===
-    # # Number of GPUs to allocate to the trainer process. Note that not all
-    # # algorithms can take advantage of trainer GPUs. Support for multi-GPU
-    # # is currently only available for tf-[PPO/IMPALA/DQN/PG].
-    # # This can be fractional (e.g., 0.3 GPUs).
-    # "num_gpus": 0,
-    # # Set to True for debugging (multi-)?GPU funcitonality on a CPU machine.
-    # # GPU towers will be simulated by graphs located on CPUs in this case.
-    # # Use `num_gpus` to test for different numbers of fake GPUs.
-    # "_fake_gpus": False,
-    # # Number of CPUs to allocate per worker.
-    # "num_cpus_per_worker": 1,
-    # # Number of GPUs to allocate per worker. This can be fractional. This is
-    # # usually needed only if your env itself requires a GPU (i.e., it is a
-    # # GPU-intensive video game), or model inference is unusually expensive.
-    # "num_gpus_per_worker": 0,
-    # # Any custom Ray resources to allocate per worker.
+    # TODO remaining: `resources()`
     # "custom_resources_per_worker": {},
-    # # Number of CPUs to allocate for the trainer. Note: this only takes effect
-    # # when running in Tune. Otherwise, the trainer runs in the main program.
-    # "num_cpus_for_driver": 1,
     # # The strategy for the placement group factory returned by
     # # `Trainer.default_resource_request()`. A PlacementGroup defines, which
     # # devices (resources) should always be co-located on the same node.
@@ -522,7 +697,9 @@ class TrainerConfig:
     # # Max output file size before rolling over to a new file.
     # "output_max_file_size": 64 * 1024 * 1024,
 
-    # TODO def multi_agent()
+    #def multi_agent(self, *, policies=None, policy_map_capacity=None):
+    #    pass
+
     # # === Settings for Multi-Agent Environments ===
     # "multiagent": {
     #     # Map of type MultiAgentPolicyConfigDict from policy ids to tuples
@@ -602,28 +779,6 @@ class TrainerConfig:
     #
     # # If True, disable the environment pre-checking module.
     # "disable_env_checking": False,
-
-    # TODO don't support these in configurator anymore.
-    # # === Deprecated keys ===
-    # # Uses the sync samples optimizer instead of the multi-gpu one. This is
-    # # usually slower, but you might want to try it if you run into issues with
-    # # the default optimizer.
-    # # This will be set automatically from now on.
-    # "simple_optimizer": DEPRECATED_VALUE,
-    # # Whether to write episode stats and videos to the agent log dir. This is
-    # # typically located in ~/ray_results.
-    # "monitor": DEPRECATED_VALUE,
-    # # Replaced by `evaluation_duration=10` and
-    # # `evaluation_duration_unit=episodes`.
-    # "evaluation_num_episodes": DEPRECATED_VALUE,
-    # # Use `metrics_num_episodes_for_smoothing` instead.
-    # "metrics_smoothing_episodes": DEPRECATED_VALUE,
-    # # Use `min_[env|train]_timesteps_per_reporting` instead.
-    # "timesteps_per_iteration": 0,
-    # # Use `min_time_s_per_reporting` instead.
-    # "min_iter_time_s": DEPRECATED_VALUE,
-    # # Use `metrics_episode_collection_timeout_s` instead.
-    # "collect_metrics_timeout": DEPRECATED_VALUE,
 
 
 if __name__ == "__main__":

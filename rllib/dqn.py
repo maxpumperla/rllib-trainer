@@ -29,8 +29,9 @@ class DQNConfig(TrainerConfig):
                  double_q=True,
                  n_step=1,
                  ):
-
-        super().__init__()
+        """Initializes a PPOConfig instance.
+        """
+        super().__init__(trainer_class=DQNTrainer)
 
         if hiddens is None:
             hiddens = [256]
@@ -40,36 +41,7 @@ class DQNConfig(TrainerConfig):
         self.double_q = double_q
         self.n_step = n_step
 
-    def to_dict(self):
-
-        extra_config = vars(self)
-        # Worst naming convention ever. NEVER EVER use reserved key-words...
-        extra_config["lambda"] = self.lambda_
-        extra_config.pop("lambda_")
-
-        base_config = DQNTrainer.get_default_config()
-
-        return Trainer.merge_trainer_configs(
-            base_config, extra_config, _allow_unknown_configs=False)
-
-    def build(self, env=None, logger_creator=None):
-        """ Builds a Trainer from the TrainerConfig.
-
-        Args:
-            env: Name of the environment to use (e.g. a gym-registered str),
-                a full class path (e.g.
-                "ray.rllib.examples.env.random_env.RandomEnv"), or an Env
-                class directly. Note that this arg can also be specified via
-                the "env" key in `config`.
-            logger_creator: Callable that creates a ray.tune.Logger
-                object. If unspecified, a default logger is created.
-
-        Returns:
-            A ray.rllib.agents.dqn.DQNTrainer object.
-        """
-        return DQNTrainer(config=self.to_dict(), env=env, logger_creator=logger_creator)
-
 
 if __name__ == "__main__":
     import doctest
-    doctest.run_docstring_examples(PPOConfig, globals())
+    doctest.run_docstring_examples(DQNConfig, globals())
