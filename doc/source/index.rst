@@ -12,43 +12,26 @@ Defining a trainer
 
 Here's how you define and run a PPO Trainer, with and without Tune:
 
-.. code-block:: python
+.. literalinclude:: /../../examples.py
+   :language: python
+   :start-after: __trainer_begin__
+   :end-before: __trainer_end__
 
-    from ray import tune
-    from rllib.ppo import PPOConfig
 
+And here's an example for a DQN trainer:
 
-    config = PPOConfig(kl_coeff=0.3) \
-        .training(gamma=0.9, lr=0.01) \
-        .resources(num_gpus=0) \
-        .workers(num_workers=4)
+.. literalinclude:: /../../examples.py
+   :language: python
+   :start-after: __dqn_begin__
+   :end-before: __dqn_end__
 
-    print(config.to_dict())
-    trainer = config.build(env="CartPole-v1")
-    trainer.train()
-
-    config_dict = trainer.get_config()
-    config_dict.update({
-        "lr": tune.grid_search([0.01, 0.001, 0.0001]),
-    })
-
-    tune.run(
-        "PPO",
-        stop={"episode_reward_mean": 200},
-        config=config_dict
-    )
 
 If you define a DQN Trainer with the wrong config, your IDE will tell you on definition:
 
-.. code-block:: python
-
-    from rllib.dqn import DQNConfig
-
-    # "kl_coeff" is not defined in DQNConfig, your IDE will bark at you.
-    config = DQNConfig(kl_coeff=0.3) \
-        .training(gamma=0.9, lr=0.01) \
-        .resources(num_gpus=0) \
-        .workers(num_workers=4)
+.. literalinclude:: /../../examples.py
+   :language: python
+   :start-after: __dqn_fail_begin__
+   :end-before: __dqn_fail_end__
 
 Here's a snapshot from PyCharm:
 

@@ -145,8 +145,6 @@ class TrainerConfig:
             logger_creator=logger_creator,
         )
 
-
-
     def training(self,
                  gamma: Optional[float] = None,
                  lr: Optional[float] = None,
@@ -411,7 +409,7 @@ class TrainerConfig:
         """Sets the config's exploration settings.
 
         Args:
-            explore: Default exploration behavior, iff `explore`=None is passed into
+            explore: Default exploration behavior, iff explore=None is passed into
                 compute_action(s). Set to False for no exploration behavior (e.g.,
                 for evaluation).
             exploration_config: A dict specifying the Exploration object's config.
